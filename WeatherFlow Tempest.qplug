@@ -1,0 +1,3521 @@
+-- Basic Framework Plugin
+-- by QSC
+-- October 2020
+
+-- Information block for the plugin
+PluginInfo = {
+  Name = "WeatherFlow Tempest",
+  Version = "1.0",
+  BuildVersion = "1.0.0.0",
+  Id = "d93d8f0e-77f2-446b-af5c-0524ad641255",
+  Author = "QSC, LLC",
+  Description = "This plugin communicates with the WeatherFlow Tempest weather station to retrieve weather data. It uses either the UDP or WebSocket protocol to connect to the station and retrieve data. The plugin can be used to display current weather conditions, forecast data, and other relevant information.",  
+}
+
+-- Define the color of the plugin object in the design
+function GetColor(props)
+  return { 51,33,55 }
+end
+
+-- The name that will initially display when dragged into a design
+function GetPrettyName(props)
+  return PluginInfo.Name .. " " .. PluginInfo.Version
+end
+
+-- Optional function used if plugin has multiple pages
+PageNames = { "Configuration", "Weather Data", "Status" }  --List the pages within the plugin
+function GetPages(props)
+  local pages = {}
+  if props["Connection Method"].Value == "UDP" then
+    PageNames = { "Configuration", "Weather Data", "Status" }  --List the pages within the plugin
+  else -- WebSocket
+    PageNames = { "Configuration", "Weather Data" }  --List the pages within the plugin
+  end
+  for ix,name in ipairs(PageNames) do
+    table.insert(pages, {name = PageNames[ix]})
+  end
+  return pages
+end
+
+-- Optional function to define model if plugin supports more than one model
+function GetModel(props)
+  local model = {}
+  if props.Model ~= nil and props.Model.Value ~= "" then
+    table.insert(model, { props.Model.Value } )
+  else
+    table.insert(model, { "Base Model" } )
+  end
+ return model
+end
+
+-- Define User configurable Properties of the plugin
+function GetProperties()
+  local props = {}
+  table.insert(props, {
+    Name = "Connection Method",
+    Type = "enum",
+    Choices = {"UDP", "WebSocket"},
+    Value = "UDP",
+  })
+  table.insert(props, {
+    -- Header = "Station Alerts",
+    Name = "Precipitation Alert Enable",
+    Type = "boolean",
+    Value = false
+  })
+  table.insert(props, {
+    Name = "Lightning Alert Enable",
+    Type = "boolean",
+    Value = false
+  })
+  table.insert(props, {
+    Name = "Wind Alert Enable",
+    Type = "boolean",
+    Value = false
+  })
+  table.insert(props, {
+    Name = "Debug Print",
+    Type = "enum",
+    Choices = {"Tx/Rx", "Tx", "Rx", "Function Calls", "All"},
+    Value = "All"
+  })
+  return props
+end
+
+-- Optional function to define pins on the plugin that are not connected to a Control
+function GetPins(props)
+  local pins = {}
+  -- table.insert(pins,{
+  --   Name = "Audio Output",
+  --   Direction = "output",
+  -- })
+  return pins
+end
+
+-- Optional function to update available properties when properties are altered by the user
+function RectifyProperties(props)
+  if props.plugin_show_debug.Value == false then 
+    props["Debug Print"].IsHidden = true 
+  end
+  return props
+end
+
+-- Optional function to define components used within the plugin
+-- function GetComponents(props)
+--   local components = {}
+--   --[[ #include "components.lua" ]]
+--   return components
+-- end
+
+-- Optional function to define wiring of components used within the plugin
+-- function GetWiring(props)
+--   local wiring = {}
+--   --[[ #include "wiring.lua" ]]
+--   return wiring
+-- end
+
+-- Defines the Controls used within the plugin
+function GetControls(props)
+  local ctrls = {}
+  -- Status Control
+  table.insert(ctrls, {
+    Name = "Status",
+    ControlType = "Indicator",
+    IndicatorType = "Status",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  -- Unique Controls
+  table.insert(ctrls, {
+    Name = "Access-Token",
+    ControlType = "Text",
+    DefaultValue = "",
+    UserPin = false,
+    PinStyle = "None",
+    Count = 1
+  })
+  table.insert(ctrls, {
+    Name = "Device-ID",
+    ControlType = "Text",
+    DefaultValue = "",
+    UserPin = false,
+    PinStyle = "None",
+    Count = 1
+  })
+  table.insert(ctrls, {
+    Name = "Connect",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    ButtonVisualStyle = "Gloss",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Input",
+    CornerRadius = 2,
+    Margin = 2
+  })
+  table.insert(ctrls, {
+    Name = "Connected",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    UserPin = true,
+    PinStyle = "Output",
+    Color = { 255,0, 0 },
+    Count = 1,
+  })
+  table.insert(ctrls, {
+    Name = "Get Forecast",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    ButtonVisualStyle = "Gloss",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Input",
+    CornerRadius = 2,
+    Margin = 2
+  })
+  table.insert(ctrls, {
+    Name = "Get Rapid Wind Reports",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    ButtonVisualStyle = "Gloss",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Input",
+    CornerRadius = 2,
+    Margin = 2
+  })
+  
+  table.insert(ctrls, {
+    Name = "Unit",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    ButtonVisualStyle = "Gloss",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+    CornerRadius = 2,
+    Margin = 2,
+  })
+  
+  
+  -- Observations 
+  local obs = {
+    "timestamp",
+    "wind-lull",
+    "wind-average",
+    "wind-gust",
+    "wind-direction",
+    "wind-interval",
+    "pressure",
+    "airtemp",
+    "humidity",
+    "illuminance",
+    "uv",
+    "solar-radiation",
+    "rain-pastmin",
+    "precip-type",
+    "lightning-avg-dist",
+    "lightning-strike-count",
+    "battery",
+    "reporting-interval"
+  }
+  for _, name in ipairs(obs) do
+    table.insert(ctrls, {
+      Name = "obs-"..name,
+      ControlType = "Indicator",
+      IndicatorType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    })
+  end
+  
+  -- Precipitation
+  table.insert(ctrls, {
+    Name = "precip-start-event",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  
+  table.insert(ctrls, {
+    Name = "precip-start-time",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  
+  table.insert(ctrls, {
+    Name = "precip-message",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  
+  -- Lightning Events
+  
+  table.insert(ctrls, {
+    Name = "lightning-start-event",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  
+  local lightning = {
+    "strike-time",
+    "strike-distance",
+    "strike-energy",
+    "message"
+  }
+  
+  for _, name in ipairs(lightning) do
+    table.insert(ctrls, {
+      Name = "lightning-"..name,
+      ControlType = "Indicator",
+      IndicatorType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    })
+  end
+  
+  -- Wind Events
+  table.insert(ctrls, {
+    Name = "wind-start-event",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    UserPin = true,
+    PinStyle = "Output",
+    Count = 1
+  })
+  
+  local wind = {
+    "time",
+    "speed",
+    "direction",
+    "message"
+  }
+  for _, name in ipairs(wind) do
+    table.insert(ctrls, {
+      Name = "wind-"..name,
+      ControlType = "Indicator",
+      IndicatorType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    })
+  end
+  
+  -- Summary Data
+  -- These are the summary data points that are not part of the main observation set
+  local sum = {
+    "pressure-trend",
+    "lightning-last-1h",
+    "lightning-last-3h",
+    "lightning-last-dist",
+    "lightning-last-time",
+    "precip-last-1h",
+    "precip-accum-yesterday",
+    "precip-accum-yesterday-final",
+    "precip-analysis-yesterday",
+    "precip-minutes-today",
+    "precip-minutes-yesterday",
+    "feels-like",
+    "heat-index",
+    "wind-chill",
+    "dew-point",
+    "wet-bulb-temp",
+    "wet-bulb-globe-temp",
+    "air-density",
+    "delta-t"
+  }
+  
+  for _, name in ipairs(sum) do
+    table.insert(ctrls, {
+      Name = "sum-"..name,
+      ControlType = "Indicator",
+      IndicatorType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    })
+  end
+  
+  -- Status Data
+  -- These are the status data values that are only part of the UDP protocol
+  local status = {
+    "device-sn",
+    "device-hub-sn",
+    "device-time",
+    "device-uptime",
+    "device-voltage",
+    "device-firmware",
+    "device-rssi",
+    "device-hub-rssi",
+    "device-sensor-status",
+    "hub-sn",
+    "hub-firmware",
+    "hub-uptime",
+    "hub-rssi",
+    "hub-time",
+    "hub-reset-flag",
+    "hub-seq",
+    "hub-fs",
+    "hub-radio",
+    "hub-freq",
+    "hub-hw-ver",
+    "hub-hardware-id"
+  }
+  
+  for _, name in ipairs(status) do
+    table.insert(ctrls, {
+      Name = "status-"..name,
+      ControlType = "Indicator",
+      IndicatorType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    })
+  end
+  return ctrls
+end
+
+--Layout of controls and graphics for the plugin UI to display
+function GetControlLayout(props)
+  local layout = {}
+  local graphics = {}
+  local CurrentPage = PageNames[props["page_index"].Value]
+  if CurrentPage == "Configuration" then
+    -- BG
+    if props["Connection Method"].Value == "WebSocket" then
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {0,0},
+      Size = {400,450},
+      Fill = {255,255,255},
+      StrokeWidth = 0,
+      CornerRadius = 0
+    })
+    else
+      table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {0,0},
+      Size = {400,240},
+      Fill = {255,255,255},
+      StrokeWidth = 0,
+      CornerRadius = 0
+    })
+    end
+    -- Title Block
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {0,0},
+      Size = {400,40},
+      Fill = {51,33,55},
+      StrokeWidth = 0,
+      Text = "WeatherFlow Tempest",
+      Color = {255,255,255},
+      FontSize = 16,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+    -- Congiguration Section
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {13,50},
+      Size = {375,170},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 3,
+      StrokeColor = {51,33,55},
+      CornerRadius = 8
+    })
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {13,50},
+      Size = {375,25},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Configuration",
+      Color = {51,33,55},
+      FontSize = 10,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {32,81},
+      Size = {94,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Status",
+      Color = {51,51,51},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["Status"] = {
+      PrettyName = "Status",
+      Position = {126,81},
+      Size = {244,16},
+    }
+    if props["Connection Method"].Value == "WebSocket" then
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {32,107},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Access Token",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {32,133},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Device ID",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+    end
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {32,159},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Connect to Station",
+      Color = {51,51,51},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Left",
+      VTextAlign = "Center"
+    })
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {194,159},
+      Size = {138,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Connection Status",
+      Color = {51,51,51},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    if props["Connection Method"].Value == "WebSocket" then
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {32,185},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Get Weather Data",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Left",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {194,185},
+        Size = {138,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Get Rapid Wind Reports",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+    end
+    if props["Connection Method"].Value == "WebSocket" then
+      -- Configuration Controls
+      layout["Access-Token"] = {
+        Type = "Text",
+        Position = {126,107},
+        Size = {244,16},
+        Fill = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      layout["Device-ID"] = {
+        Type = "Text",
+        Position = {126,133},
+        Size = {244,16},
+        Fill = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+    end
+    layout["Connect"] = {
+      Type = "Button",
+      Position = {158,159},
+      Size = {36,16},
+      StrokeWidth = 1
+    }
+    layout["Connected"] = {
+      Type = "Led",
+      Position = {352,159},
+      Size = {16,16},
+      StrokeWidth = 1,
+      Margin = 3,
+      Color = {255,0,0}
+    }
+    if props["Connection Method"].Value == "WebSocket" then
+      layout["Get Forecast"] = {
+        Type = "Button",
+        Position = {158,185},
+        Size = {36,16},
+        StrokeWidth = 1
+      }
+      layout["Get Rapid Wind Reports"] = {
+        Type = "Button",
+        Position = {332,185},
+        Size = {36,16},
+        StrokeWidth = 1
+      }
+    end
+  
+  -- Instruction Section
+    if props["Connection Method"].Value == "WebSocket" then
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,230},
+        Size = {375,200},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+  
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,230},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Instructions",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "Bold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+  
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {18,253},
+        Size = {365,177},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Margin = 5,
+        Padding = 5,
+        Text = 'To connect using the Websocket API, you need to generate an access token. To generate a token, first, head to Tempestwx.com. Then, go to Settings -> Data Authorizations -> Create Token. Next, copy and past the token into the app. To obtain the Device ID, head to Settings -> Stations -> <Your Station> -> Status, and you will see the Device ID. Enter this data into the above Configuration fields. Then, select "Connect to Station". Once the station is connected, select which style of data you would like to receive.',
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Left",
+        VTextAlign = "Center",
+      })
+    end
+  
+  elseif CurrentPage == "Weather Data" then
+      -- BG
+    if props["Connection Method"].Value == "WebSocket" then
+      table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {0,0},
+      Size = {400,899},
+      Fill = {255,255,255},
+      StrokeWidth = 0,
+      CornerRadius = 0
+      })
+    else
+      table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {0,0},
+      Size = {400,689},
+      Fill = {255,255,255},
+      StrokeWidth = 0,
+      CornerRadius = 0
+      })
+    end
+  
+    -- Title Block
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {0,0},
+      Size = {400,40},
+      Fill = {51,33,55},
+      StrokeWidth = 0,
+      Text = "WeatherFlow Tempest",
+      Color = {255,255,255},
+      FontSize = 16,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+    -- Weather Data Section
+  
+    
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,50},
+        Size = {375,325},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,50},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Observations",
+        Color = {0,0,0},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "Bold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {35,85},
+        Size = {155,75},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8 
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,85},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Current Conditions",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,101},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Air Temperature",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-airtemp"] = {
+        Type = "Text",
+        PrettyName = "Observations~Air Temperature",
+        Position = {130,101},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,117},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Humidity",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-humidity"] = {
+        Type = "Text",
+        PrettyName = "Observations~Humidity",
+        Position = {130,117},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,133},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Pressure",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-pressure"] = {
+        Type = "Text",
+        PrettyName = "Observations~Pressure",
+        Position = {130,133},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {209,85},
+        Size = {155,75},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      -- Sunlight Section
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,85},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Sunlight",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,101},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "illuminance",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-illuminance"] = {
+        Type = "Text",
+        PrettyName = "Observations~Illuminance",
+        Position = {304,101},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,117},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "UV Index",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-uv"] = {
+        Type = "Text",
+        PrettyName = "Observations~UV Index",
+        Position = {304,117},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,133},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Solar Radiation",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-solar-radiation"] = {
+        Type = "Text",
+        PrettyName = "Observations~Solar Radiation",
+        Position = {304,133},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Wind Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {35,168},
+        Size = {155,105},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,168},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,184},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Lull",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-wind-lull"] = {
+        Type = "Text",
+        PrettyName = "Observations~Wind Lull",
+        Position = {130,184},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,200},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Average",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-wind-average"] = {
+        Type = "Text",
+        PrettyName = "Observations~Wind Average",
+        Position = {130,200},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,216},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Gust",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-wind-gust"] = {
+        Type = "Text",
+        PrettyName = "Observations~Wind Gust",
+        Position = {130,216},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,232},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Direction",  
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",   
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-wind-direction"] = {
+        Type = "Text",
+        PrettyName = "Observations~Wind Direction",
+        Position = {130,232},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,248},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Interval",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-wind-interval"] = {
+        Type = "Text",
+        PrettyName = "Observations~Wind Interval",
+        Position = {130,248},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Precipitation Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {209,168},
+        Size = {155,75},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,168},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precipitation",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,184},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Rain (Past Min.)",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-rain-pastmin"] = {
+        Type = "Text",
+        PrettyName = "Observations~Rain (Past Min.)",
+        Position = {304,184},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,200},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precip. Type",  
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-precip-type"] = {
+        Type = "Text",
+        PrettyName = "Observations~Precipitation Type",
+        Position = {304,200},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Sensor Information Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {35,280},
+        Size = {155,55},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,280},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Sensor Info",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,296},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Battery Voltage",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-battery"] = {
+        Type = "Text",
+        PrettyName = "Observations~Battery Voltage",
+        Position = {130,296},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,312},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Update Interval",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-reporting-interval"] = {
+        Type = "Text",
+        PrettyName = "Observations~Update Interval",
+        Position = {130,312},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Misc. Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {209,248},
+        Size = {155,75},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,248},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Unit of Measurement",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+  
+      layout["Unit"] = {
+        Type = "Button",
+        Position = {247,277},
+        Size = {80,32},
+        StrokeWidth = 1,
+        CornerRadius = 2,
+        Margin = 2,
+        PrettyName = "Unit",
+        Legend = "Metric",
+        UnlinkOffColor = true,
+        Color = {226,50,50},
+        OffColor = {0,140,210},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+  
+      -- Observations Footer
+      
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {98,345},
+        Size = {103,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Updated",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Bold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+  
+      layout["obs-timestamp"] = {
+        Type = "Text",
+        PrettyName = "Observations~Timestamp",
+        Position = {201,345},
+        Size = {105,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+  
+      -- Precipitation Event Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,385},
+        Size = {375,65},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,385},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precipitation Event",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      layout["precip-start-event"] = {
+        Type = "Led",
+        PrettyName = "Precipitation~Start Event",
+        Position = {132,389},
+        Size = {16,16},
+        StrokeWidth = 1,
+        Margin = 3,
+        Color = {255,0,0}
+       }
+       table.insert(graphics, {
+        Type = "Label",
+        Position = {37,410},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precipitation Start Time",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Light",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+       })
+       layout["precip-start-time"] = {
+        Type = "Text",
+        PrettyName = "Precipitation~Start Time",
+        Position = {165,410},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+       }
+       if props["Precipitation Alert Enable"].Value == true then
+        table.insert(graphics, {
+        Type = "Label",
+        Position = {37,426},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precipitation Alert",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Light",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+        })
+        layout["precip-message"] = {
+          Type = "Text",
+          PrettyName = "Precipitation~Message",
+          Position = {165,426},
+          Size = {200,16},
+          Color = {255,255,255,0.0},
+          TextBoxStyle = "Normal",
+          StrokeWidth = 1,
+          StrokeColor = {51,33,55},
+          FontSize = 9,
+          Font = "Poppins",
+          FontStyle = "Regular",
+          HTextAlign = "Center",
+          VTextAlign = "Center"
+        }
+      end
+       -- Lightning Event Section
+       table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,455},
+        Size = {375,125},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,455},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Lightning Event",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      layout["lightning-start-event"] = {
+        Type = "Led",
+        PrettyName = "Lightning~Start Event",
+        Position = {132,459},
+        Size = {16,16},
+        StrokeWidth = 1,
+        Margin = 3,
+        Color = {255,0,0}
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,480},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Strike Time",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["lightning-strike-time"] = {
+        Type = "Text",
+        PrettyName = "Lightning~Last Strike Time",
+        Position = {165,480},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,496},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Strike Distance",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["lightning-strike-distance"] = {
+        Type = "Text",
+        PrettyName = "Lightning~Strike Distance",
+        Position = {165,496},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,512},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Strike Energy",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["lightning-strike-energy"] = {
+        Type = "Text",
+        PrettyName = "Lightning~Strike Energy",
+        Position = {165,512},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,528},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Average Distance",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-lightning-avg-dist"] = {
+        Type = "Text",
+        PrettyName = "Observations~Lightning Average Distance",
+        Position = {165,528},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,544},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Strike Count",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["obs-lightning-strike-count"] = {
+        Type = "Text",
+        PrettyName = "Observations~Lightning Strike Count",
+        Position = {165,544},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      if props["Lightning Alert Enable"].Value == true then
+        table.insert(graphics, {
+        Type = "Label",
+        Position = {37,560},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Lightning Alert",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["lightning-message"] = {
+        Type = "Text",
+        PrettyName = "Lightning~Message",
+        Position = {165,560},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      end
+      -- Wind Event Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,585},
+        Size = {375,100},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,585},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Event",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      layout["wind-start-event"] = {
+        Type = "Led",
+        PrettyName = "Wind~Start Event",
+        Position = {132,589},
+        Size = {16,16},
+        StrokeWidth = 1,
+        Margin = 3,
+        Color = {255,0,0}
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,610},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Wind Time",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["wind-time"] = {
+        Type = "Text",
+        PrettyName = "Wind~Last Wind Time",
+        Position = {165,610},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,626},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Speed",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["wind-speed"] = {
+        Type = "Text",
+        PrettyName = "Wind~Speed",
+        Position = {165,626},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {37,642},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Direction",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["wind-direction"] = {
+        Type = "Text",
+        PrettyName = "Wind~Direction",
+        Position = {165,642},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      if props["Wind Alert Enable"].Value == true then
+        table.insert(graphics, {
+        Type = "Label",
+        Position = {37,658},
+        Size = {128,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Alert",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["wind-message"] = {
+        Type = "Text",
+        PrettyName = "Wind~Message",
+        Position = {165,658},
+        Size = {200,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      end
+    -- Summary Section
+    if props["Connection Method"].Value == "WebSocket" then
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {13,696},
+        Size = {375,200},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 3,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {13,696},
+        Size = {375,25},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Summary",
+        Color = {51,33,55},
+        FontSize = 10,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {36,716},
+        Size = {155,175},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {36,716},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Conditions",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,732},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Pressure Trend",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center" 
+      })
+      layout["sum-pressure-trend"] = {
+        Type = "Text",
+        PrettyName = "Summary~Pressure Trend",
+        Position = {130,732},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,748},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Feels Like",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-feels-like"] = {
+        Type = "Text",
+        PrettyName = "Summary~Feels Like",
+        Position = {130,748},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,764},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Heat Index",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-heat-index"] = {
+        Type = "Text",
+        PrettyName = "Summary~Heat Index",
+        Position = {130,764},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,780},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wind Chill",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-wind-chill"] = {
+        Type = "Text",
+        PrettyName = "Summary~Wind Chill",
+        Position = {130,780},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,796},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Dew Point",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-dew-point"] = {
+        Type = "Text",
+        PrettyName = "Summary~Dew Point",
+        Position = {130,796},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,812},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wet Bulb Temp.",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-wet-bulb-temp"] = {
+        Type = "Text",
+        PrettyName = "Summary~Wet Bulb Temperature",
+        Position = {130,812},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,828},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Wet Bulb Globe",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-wet-bulb-globe-temp"] = {
+        Type = "Text",
+        PrettyName = "Summary~Wet Bulb Globe Temperature",
+        Position = {130,828},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,844},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Air Density",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-air-density"] = {
+        Type = "Text",
+        PrettyName = "Summary~Air Density",
+        Position = {130,844},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {35,860},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Temperature Delta",
+        Color = {51,51,51},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-delta-t"] = {
+        Type = "Text",
+        PrettyName = "Summary~Temperature Delta",
+        Position = {130,860},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Precipitation Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {209,716},
+        Size = {155,72},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,716},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Precipitation",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,732},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Hour Accum.",
+        Color = {51,51,51},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-precip-last-1h"] = {
+        Type = "Text",
+        PrettyName = "Summary~Precipitation Last Hour Accumulation",
+        Position = {304,732},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,748},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Yest. Accum.",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-precip-accum-yesterday"] = {
+        Type = "Text",
+        PrettyName = "Summary~Precipitation Yesterday Accumulation",
+        Position = {304,748},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,764},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Yest. Accum. Final",
+        Color = {51,51,51},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-precip-accum-yesterday-final"] = {
+        Type = "Text",
+        PrettyName = "Summary~Precipitation Yesterday Final Accumulation",
+        Position = {304,764},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      -- Lightning Section
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Position = {209,796},
+        Size = {155,85},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        CornerRadius = 8
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,796},
+        Size = {155,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Lightning",
+        Color = {51,33,55},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "SemiBold",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      })
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,812},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last 1h Strikes",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-lightning-last-1h"] = {
+        Type = "Text",
+        PrettyName = "Summary~Lightning Last 1 Hour Strikes",
+        Position = {304,812},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,828},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last 3h Strikes",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-lightning-last-3h"] = {
+        Type = "Text",
+        PrettyName = "Summary~Lightning Last 3 Hour Strikes",
+        Position = {304,828},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,844},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Strike Dist.",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-lightning-last-dist"] = {
+        Type = "Text",
+        PrettyName = "Summary~Lightning Last Strike Distance",
+        Position = {304,844},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+      table.insert(graphics, {
+        Type = "Label",
+        Position = {209,860},
+        Size = {94,16},
+        Fill = {0,0,0,0.0},
+        StrokeWidth = 0,
+        Text = "Last Strike Time",
+        Color = {51,51,51},
+        FontSize = 11,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Right",
+        VTextAlign = "Center"
+      })
+      layout["sum-lightning-last-time"] = {
+        Type = "Text",
+        PrettyName = "Summary~Lightning Last Strike Time",
+        Position = {304,860},
+        Size = {60,16},
+        Color = {255,255,255, 0.0},
+        TextBoxStyle = "Normal",
+        StrokeWidth = 1,
+        StrokeColor = {51,33,55},
+        FontSize = 9,
+        Font = "Poppins",
+        FontStyle = "Regular",
+        HTextAlign = "Center",
+        VTextAlign = "Center"
+      }
+    end
+  elseif CurrentPage == "Status" then
+    -- BG
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {0,0},
+      Size = {400,495},
+      Fill = {255,255,255},
+      StrokeWidth = 0,
+      CornerRadius = 0
+    })
+      -- Title Block
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {0,0},
+      Size = {400,40},
+      Fill = {51,33,55},
+      StrokeWidth = 0,
+      Text = "WeatherFlow Tempest",
+      Color = {255,255,255},
+      FontSize = 16,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+  
+    -- Status Section
+  
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {13,50},
+      Size = {375,195},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 3,
+      StrokeColor = {51,33,55},
+      CornerRadius = 8
+    })
+  
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {13,50},
+      Size = {375,25},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Sensor Status",
+      Color = {0,0,0},
+      FontSize = 10,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+  
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,70},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Serial Number",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-sn"] = {
+      Type = "Text",
+      PrettyName = "Status~Serial Number",
+      Position = {165,70},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,86},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Paired Hub",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-hub-sn"] = {
+      Type = "Text",
+      PrettyName = "Status~Paired Hub",
+      Position = {165,86},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,102},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Uptime",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-uptime"] = {
+      Type = "Text",
+      PrettyName = "Status~Uptime",
+      Position = {165,102},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,118},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Voltage",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-voltage"] = {
+      Type = "Text",
+      PrettyName = "Status~Voltage",
+      Position = {165,118},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,134},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Firmware",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-firmware"] = {
+      Type = "Text",
+      PrettyName = "Status~Firmware",
+      Position = {165,134},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,150},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Station Wifi Signal Strength",
+      Color = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-rssi"] = {
+      Type = "Text",
+      PrettyName = "Status~Station Wifi Signal Strength",
+      Position = {165,150},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,166},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Wifi Signal Strength",
+      Color = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-hub-rssi"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Wifi Signal Strength",
+      Position = {165,166},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,182},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Sensor Status",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-sensor-status"] = {
+      Type = "Text",
+      PrettyName = "Status~Sensor Status",
+      Position = {165,182},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,210},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Last Updated",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-device-time"] = {
+      Type = "Text",
+      PrettyName = "Status~Last Updated",
+      Position = {165,210},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+  
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Position = {13,255},
+      Size = {375,240},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 3,
+      StrokeColor = {51,33,55},
+      CornerRadius = 8
+    })
+  
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {13,255},
+      Size = {375,25},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Status",
+      Color = {0,0,0},
+      FontSize = 10,
+      Font = "Poppins",
+      FontStyle = "Bold",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    })
+  
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,275},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Serial Number",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-sn"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Serial Number",
+      Position = {165,275},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,291},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Firmware",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-firmware"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Firmware",
+      Position = {165,291},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal", 
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55}, 
+      FontSize = 9,
+      Font = "Poppins", 
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,307},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Uptime",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-uptime"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Uptime",
+      Position = {165,307},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,323},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Wifi Signal Strength",
+      Color = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-rssi"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Wifi Signal Strength",
+      Position = {165,323},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,339},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Reset Flags",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-reset-flag"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Reset Flags",
+      Position = {165,339},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,355},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Seq",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-seq"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Seq",
+      Position = {165,355},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,371},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub fs",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-fs"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub fs",
+      Position = {165,371},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,387},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Radio Info",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center" 
+    })
+    layout["status-hub-radio"] = {
+      Type = "Text",
+      PrettyName = "Status~Radio Info",
+      Position = {165,387},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,403},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub Frequency",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-freq"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Frequency",
+      Position = {165,403},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,419},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub HW Version",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-hw-ver"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub HW Version",
+      Position = {165,419},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,435},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Hub HW ID",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins", 
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-hardware-id"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub HW ID",
+      Position = {165,435},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+    table.insert(graphics, {
+      Type = "Label",
+      Position = {37,462},
+      Size = {128,16},
+      Fill = {0,0,0,0.0},
+      StrokeWidth = 0,
+      Text = "Last Updated",
+      Color = {51,33,55},
+      FontSize = 11,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Right",
+      VTextAlign = "Center"
+    })
+    layout["status-hub-time"] = {
+      Type = "Text",
+      PrettyName = "Status~Hub Last Updated",
+      Position = {165,462},
+      Size = {200,16},
+      Color = {255,255,255, 0.0},
+      TextBoxStyle = "Normal",  
+      StrokeWidth = 1,
+      StrokeColor = {51,33,55},
+      FontSize = 9,
+      Font = "Poppins",
+      FontStyle = "Regular",
+      HTextAlign = "Center",
+      VTextAlign = "Center"
+    }
+  end
+  return layout, graphics
+end
+
+--Start event based logic
+if Controls then
+  rapidjson = require ("rapidjson")
+  bitstring = require ("bitstring")
+  
+  -- Debug Printing
+  
+  
+  function PrintToDebug(prop, msg)
+    local debugMode = Properties["Debug Print"].Value
+    local propMap = {
+      ["Tx/Rx"] = { "Tx", "Rx" },
+      ["Tx"] = { "Tx" },
+      ["Rx"] = { "Rx" },
+      ["Function Calls"] = { "function" },
+      ["All"] = {"tx", "rx", "function" }
+    }
+  local info = debug.getinfo(2, "n")
+  local caller = info and info.name or "unknown"
+  
+    local allowedProps = propMap[debugMode] or {}
+    for _, allowed in ipairs(allowedProps) do
+      if prop == allowed then
+        print(string.format("[%s] %s", caller, msg))
+        return
+      end
+    end
+  end
+  
+  -- status flags
+  statusState = {
+    OK = 0,
+    COMPROMISED = 1,
+    FAULT = 2,
+    NOTPRESENT = 3,
+    MISSING = 4,
+    INITIALIZING = 5
+  }
+  
+  --bitstring flags and decode function 
+  sensorFlags = {
+    [0x000] = "Status Good",
+    [0x001] = "Lightning Sensor failed",
+    [0x002] = "Lightning Sensor noise",
+    [0x004] = "Lightning Sensor disturbed",
+    [0x008] = "Pressure Sensor failed",
+    [0x010] = "Temperature Sensor failed",
+    [0x020] = "Humidity Sensor failed",
+    [0x040] = "Wind Sensor failed",
+    [0x080] = "Rain Sensor failed",
+    [0x100] = "Light/UV Sensor failed",
+    [0x200] = "Power booster detected",
+    [0x8000] = "Power booster depleted",
+    [0x10000] = "Power booster shore power"
+  }
+  
+  function decodeSensorState(data)
+    local status_desc = ""
+    PrintToDebug("function", "Decoding Sensor Data")
+    if data then 
+      PrintToDebug("function", "String Value: "..data)
+      local packed = bitstring.pack("32:int:big", data)
+      PrintToDebug("function", "Raw Binary value: "..bitstring.binstream(packed))
+      for bitmask, description in pairs(sensorFlags) do
+        if math.floor(data / bitmask) % 2 == 1 then 
+          status_desc = status_desc .. "\n - "..description
+          PrintToDebug("function", status_desc)
+        end
+      end
+      if status_desc == "" then 
+        status_desc = "All Sensors Good"
+      end 
+    end
+    return status_desc
+  end 
+  
+  -- Unit Conversion functions 
+  
+  function ConvertTime(EPOCH)
+    return (os.date("%m/%d/%Y %I:%M%p", EPOCH))
+  end
+  
+  function KmToMi(km)
+    return(tonumber(km) * 0.621371)
+  end
+  
+  function MpsToMph(mps)
+    return(tonumber(mps) * 2.23694)
+  end
+  
+  function CToF(c)
+    return (tonumber(c) * 9/5) + 32
+  end
+  
+  function MMToIn(mm)
+    return (tonumber(mm) * 0.0393701)
+  end
+  
+  function KgToLb(kg)
+    return (tonumber(kg) *  0.062427960576145)
+  end
+  
+  Controls.Unit.EventHandler = function(ctrl)
+    if ctrl.Boolean then
+      ctrl.Legend = "Imperial"
+    else
+      ctrl.Legend = "Metric"
+    end
+  end
+  
+  if Controls.Unit.Boolean then
+    Controls.Unit.Legend = "Imperial"
+  else
+    Controls.Unit.Legend = "Metric"
+  end
+  
+  -- Alert Timeouts --
+  lxLockout = Timer.New()
+  precipLockout = Timer.New()
+  
+  lxLockout.EventHandler = function()
+    lxLockout:Stop()
+  end
+  precipLockout.EventHandler = function()
+    precipLockout:Stop()
+  end
+  
+  function SetEventsLow()
+    Controls["precip-start-event"].Boolean = false
+    Controls["lightning-start-event"].Boolean = false
+    Controls["wind-start-event"].Boolean = false
+  end
+  
+  -- Status Management
+  function SetStatus(state, msg)
+    PrintToDebug("function", "Status Changed to: ".. state, msg)
+    Controls["Status"].Value = statusState[state]
+    Controls["Status"].String = msg
+  end
+  -- Socket Management -- 
+  
+  if Properties["Connection Method"].Value == "WebSocket" then
+    ws = WebSocket.New()
+    protocol = "wss"
+    host = "ws.weatherflow.com"
+    url = "swd/data?token="
+    port = 443
+    sub_protocol = nil
+    headers = {}
+  
+    --Build the API Command Table
+    listen = {
+      start = {
+        type = "listen_start",
+        device_id = "rand-dev-12345",--Init this to a default value. This is overwritten with the station ID
+        id = "rand-id-12345" -- Init this to a default value. This is overwritten with the Timestamp on a new command write
+      },
+      stop = {
+        type = "listen_stop",
+        device_id = "rand-dev-12345", --Init this to a default value. This is overwritten with the station ID
+        id = "rand-id-12345" -- Init this to a default value. This is overwritten with the Timestamp on a new command write
+      },
+      rapidStart = {
+        type = "listen_rapid_start",
+        device_id = "rand-dev-12345", --Init this to a default value. This is overwritten with the station ID
+        id = "rand-id-12345" -- Init this to a default value. This is overwritten with the Timestamp on a new command write
+      },
+      rapidStop = {
+        type = "listen_rapid_stop",
+        device_id = "rand-dev-12345", --Init this to a default value. This is overwritten with the station ID
+        id = "rand-id-12345" -- Init this to a default value. This is overwritten with the Timestamp on a new command write
+      },
+    }
+  else
+    udp = UdpSocket.New()
+    udp.EventHandler = function(udp, packet)
+      SetEventsLow()
+      ParseData(packet.Data)
+      SetStatus("OK"," UDP event received")
+    end
+  end
+  
+  function ResetConnectionStatus()
+    Controls["Connected"].Boolean = false
+    Controls["Connect"].Boolean = false
+    if Properties["Connection Method"].Value == "WebSocket" then
+      Controls["Get Forecast"].IsDisabled = true
+      Controls["Get Forecast"].Boolean = false
+      Controls["Get Rapid Wind Reports"].IsDisabled = true
+      Controls["Get Rapid Wind Reports"].Boolean = false
+    end
+    SetEventsLow()
+  end
+  
+  function Connect()
+    PrintToDebug("function", "Starting Connection...")
+    if Properties["Connection Method"].Value == "WebSocket" then
+      local token = Controls["Access-Token"].String
+      if token == nil or token == "" then
+        PrintToDebug("function", "Error. Access Token is not set. Please set the Access Token in the Configuration section.")
+        return
+      end
+      local sockURL = string.format("%s%s", url, token)
+      ws:Connect(protocol, host, sockURL, port, sub_protocol, headers )
+    else
+      udp:Open(_, 50222) -- Open the UDP socket on port 50222 with no ip address
+    end
+    SetStatus("INITIALIZING"," Attempting to Connect...")
+    SetEventsLow() 
+  end
+  
+  function Disconnect()
+    PrintToDebug("function", "Closing Connection...")
+    if Properties["Connection Method"].Value == "WebSocket" then
+      ws:Close()
+    else
+      udp:Close()
+    end
+    SetStatus("NOTPRESENT","  Disconnected from Tempest")
+    ResetConnectionStatus()
+  end
+  
+  -- WebSocket exclusive connection controls
+  if Properties["Connection Method"].Value == "WebSocket" then
+    function Write(msg)
+      local deviceID = Controls["Device-ID"].String
+      if deviceID == nil or deviceID == "" then
+        PrintToDebug("function","Error. Missing Device ID.")
+        return
+      end
+      listen[msg].device_id = deviceID
+      listen[msg].id = string.format("%s", os.time())
+      local sockMsg = rapidjson.encode(listen[msg])
+      PrintToDebug("Tx", sockMsg)
+      ws:Write(sockMsg)
+    end
+  
+    ws.Connected = function()
+      PrintToDebug("Rx", "WebSocket connected")
+      Controls.Connected.Boolean = true
+      Controls["Get Forecast"].IsDisabled = false
+      Controls["Get Rapid Wind Reports"].IsDisabled = false
+      SetStatus("OK", " Connected")
+    end
+  
+    ws.Data = function(ws, packet)
+      PrintToDebug("Rx", packet)
+      SetEventsLow()
+      ParseData(packet)
+    end
+  
+    ws.Error = function(ws, err)
+      PrintToDebug("Rx", err)
+      ResetConnectionStatus()
+      SetStatus("FAULT", " Websocket error encountered: "..err)
+    end
+  
+    ws.Closed = function()
+      PrintToDebug("Rx", "WebSocket connection closed by host")
+      ResetConnectionStatus()
+      SetStatus("FAULT", " WebSocket connection closed by host")
+    end
+  end
+  
+  -- Data Parsing Functions
+  
+  parsingFunctions = {}
+  
+  parsingFunctions.evt_precip = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls["precip-start-event"].Boolean = true
+    Controls["precip-start-time"].String = ConvertTime(data.evt[1])
+    
+    if tostring(Properties["Precipitation Alert Enable"].Value) == "true" then
+      Controls["precip-message"].String = "Rain Detected - ".. Controls["precip-start-time"].String
+    end
+  
+    if not precipLockout:IsRunning() then
+      Timer.CallAfter(function() Controls["precip-start-event"].Boolean = true end, 0.2)
+      precipLockout:Start(300)
+    end
+  end
+  
+  parsingFunctions.evt_strike = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls["lightning-strike-time"].String = ConvertTime(data.evt[1])
+    Controls["lightning-strike-distance"].String = Controls.Unit.Boolean and KmToMi(data.evt[2]).." mi" or data.evt[2].." km"
+    Controls["lightning-strike-energy"].String = data.evt[3]
+  
+    if tostring(Properties["Lightning Alert Enable"].Value) == "true" then 
+      Controls["lightning-message"].String = "Lightning Detected - " .. Controls["lightning-strike-distance"].String .. " - ".. Controls["lightning-strike-energy"].String .. " - " .. Controls["lightning-strike-time"].String
+    end
+  
+    if not lxLockout:IsRunning() then
+      Timer.CallAfter(function() Controls["lightning-start-event"].Boolean = true end, .2)
+      lxLockout:Start(300)
+    elseif tonumber(data.evt[2]) < 0.8 then
+      Timer.CallAfter(function() Controls["lightning-start-event"].Boolean = true end, .2)
+    end
+  end
+  
+  parsingFunctions.rapid_wind = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls["wind-start-event"].Boolean = true
+    Controls["wind-time"].String = ConvertTime(data.ob[1])
+    if Controls.Unit.Boolean then
+      Controls["wind-speed"].String = MpsToMph(data.ob[2]) .. " mph"
+    else
+      Controls["wind-speed"].String = data.ob[2] .. " m/s"
+    end
+    Controls["wind-direction"].String = data.ob[3]
+  
+    if tostring(Properties["Wind Alert Enable"].Value) == "true" then
+      Controls["wind-message"].String = "Wind Detected - " .. string.format("%s @ %s", Controls["wind-speed"].String, Controls["wind-direction"].String) .. " - " .. Controls["wind-time"].String
+    end
+  end
+  
+  parsingFunctions.obs_st = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls["obs-timestamp"].String = ConvertTime(data.obs[1][1])
+    if Controls.Unit.Boolean then 
+      Controls["obs-wind-lull"].String = MpsToMph(data.obs[1][2]) .. " mph"
+      Controls["obs-wind-average"].String = MpsToMph(data.obs[1][3]) .. " mph"
+      Controls["obs-wind-gust"].String = MpsToMph(data.obs[1][4]) .. " mph"
+      Controls["obs-airtemp"].String = CToF(data.obs[1][8]) .. "° F"
+      Controls["obs-rain-pastmin"].String = MMToIn(data.obs[1][13]) .. '"'
+      Controls["obs-lightning-avg-dist"].String = KmToMi(data.obs[1][15]) .. " mi"
+    else
+      Controls["obs-wind-lull"].String = data.obs[1][2] .. " m/s"
+      Controls["obs-wind-average"].String = data.obs[1][3] .. " m/s"
+      Controls["obs-wind-gust"].String = data.obs[1][4] .. " m/s"
+      Controls["obs-airtemp"].String = data.obs[1][8] .. "° C"
+      Controls["obs-rain-pastmin"].String = data.obs[1][13] .. "mm"
+      Controls["obs-lightning-avg-dist"].String = data.obs[1][15] .. " km"
+    end
+  
+    Controls["obs-wind-direction"].String = data.obs[1][5] .. "°"
+    Controls["obs-wind-interval"].String = data.obs[1][6]
+    Controls["obs-pressure"].String = data.obs[1][7] .. " MB"
+    Controls["obs-humidity"].String = data.obs[1][9] .. "%"
+    Controls["obs-illuminance"].String = data.obs[1][10]  .. " Lux"
+    Controls["obs-uv"].String = data.obs[1][11] .. " W/m^2"
+    Controls["obs-solar-radiation"].String = data.obs[1][12]
+    Controls["obs-precip-type"].String = data.obs[1][14]
+    Controls["obs-lightning-strike-count"].String = data.obs[1][16]
+    Controls["obs-battery"].String = data.obs[1][17]
+    Controls["obs-reporting-interval"].String = data.obs[1][18]
+  
+    if Properties["Connection Method"].Value == "WebSocket" then
+      Controls["sum-pressure-trend"].String = data.summary.pressure_trend or "N/A"
+      if Controls.Unit.Boolean then 
+        Controls["sum-feels-like"].String = CToF(data.summary.feels_like) .. "° F"
+        Controls["sum-heat-index"].String = CToF(data.summary.heat_index) .. "° F"
+        Controls["sum-wind-chill"].String = CToF(data.summary.wind_chill) .. "° F"
+        Controls["sum-dew-point"].String = CToF(data.summary.dew_point) .. "° F"
+        Controls["sum-wet-bulb-temp"].String = CToF(data.summary.wet_bulb_temperature) .. "° F"
+        Controls["sum-wet-bulb-globe-temp"].String = CToF(data.summary.wet_bulb_globe_temperature) .. "° F"
+        Controls["sum-delta-t"].String = CToF(data.summary.delta_t)  .. "° F"
+        Controls["sum-precip-last-1h"].String = MMToIn(data.summary.precip_total_1h) .. " in"
+        Controls["sum-precip-accum-yesterday"].String = MMToIn(data.summary.precip_accum_local_yesterday) .. " in"
+        Controls["sum-precip-accum-yesterday-final"].String = MMToIn(data.summary.precip_accum_local_yesterday_final) .. " in"
+        Controls["sum-lightning-last-dist"].String = KmToMi(data.summary.strike_last_dist) .. " mi"
+        Controls["sum-air-density"].String = KgToLb(data.summary.air_density) .. "lb/ft3"
+      else 
+        Controls["sum-feels-like"].String = data.summary.feels_like .. "° C"
+        Controls["sum-heat-index"].String = data.summary.heat_index .. "° C"
+        Controls["sum-wind-chill"].String = data.summary.wind_chill .. "° C"
+        Controls["sum-dew-point"].String = data.summary.dew_point .. "° C"
+        Controls["sum-wet-bulb-temp"].String = data.summary.wet_bulb_temperature .. "° C"
+        Controls["sum-wet-bulb-globe-temp"].String = data.summary.wet_bulb_globe_temperature .. "° C"
+        Controls["sum-delta-t"].String = data.summary.delta_t  .. "° C"
+        Controls["sum-precip-last-1h"].String = data.summary.precip_total_1h .. " mm"
+        Controls["sum-precip-accum-yesterday"].String = data.summary.precip_accum_local_yesterday .. " mm"
+        Controls["sum-precip-accum-yesterday-final"].String = data.summary.precip_accum_local_yesterday_final .. " mm"
+        Controls["sum-lightning-last-dist"].String = data.summary.strike_last_dist .. " km"
+        Controls["sum-air-density"].String = data.summary.air_density .. "kg/m3"
+      end
+      Controls["sum-lightning-last-1h"].String = data.summary.strike_count_1h
+      Controls["sum-lightning-last-3h"].String = data.summary.strike_count_3h
+      Controls["sum-lightning-last-time"].String = ConvertTime(data.summary.strike_last_epoch)
+    end
+  end 
+  
+  parsingFunctions.device_status = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls.Connected.Boolean = data.serial_number or false
+    Controls["status-device-sn"].String = data.serial_number or "N/A"
+    Controls["status-device-hub-sn"].String = data.hub_sn or "N/A"
+    Controls["status-device-time"].String = ConvertTime(data.timestamp) or "N/A"
+    Controls["status-device-uptime"].String = data.uptime or "N/A"
+    Controls["status-device-voltage"].String = data.voltage or "N/A"
+    Controls["status-device-firmware"].String = data.firmware_revision or "N/A"
+    Controls["status-device-rssi"].String = data.rssi or "N/A"
+    Controls["status-device-hub-rssi"].String = data.hub_rssi or "N/A"
+    Controls["status-device-sensor-status"].String = decodeSensorState(data.sensor_status) or "N/A"
+  end
+  
+  parsingFunctions.hub_status = function(data)
+    PrintToDebug("function", rapidjson.encode(data))
+    Controls["status-hub-sn"].String = data.serial_number or "N/A"
+    Controls["status-hub-firmware"].String = data.firmware_revision or "N/A"
+    Controls["status-hub-uptime"].String = data.uptime or "N/A"
+    Controls["status-hub-rssi"].String = data.rssi or "N/A"
+    Controls["status-hub-time"].String = ConvertTime(data.timestamp) or "N/A"
+    Controls["status-hub-reset-flag"].String = data.reset_flags or "N/A"
+    Controls["status-hub-seq"].String = data.seq or "N/A"
+    Controls["status-hub-fs"].String = rapidjson.encode(data.fs) or "N/A"
+    Controls["status-hub-radio"].String = rapidjson.encode(data.radio_stats) or "N/A"
+    Controls["status-hub-freq"].String = data.freq or "N/A"
+    Controls["status-hub-hw-ver"].String = data.hw_version or "N/A"
+    Controls["status-hub-hardware-id"].String = data.hardware_id or "N/A"
+  end
+  
+  function ParseData(data)
+    local temp = rapidjson.decode(data)
+    PrintToDebug("function", temp["type"])
+    if parsingFunctions[temp["type"]] ~= nil then 
+      parsingFunctions[temp["type"]](temp)
+      -- parsingFunctions.device_status(temp)
+      -- parsingFunctions.hub_status(temp)
+    else
+      PrintToDebug("function", "Unknown Event - ".. temp["type"])
+    end
+  end 
+  
+  -- Event Handlers
+  
+  Controls["Connect"].EventHandler = function(ctrl)
+    if ctrl.Boolean then
+      Connect()
+    else
+      if Controls["Connected"].Boolean then
+        Disconnect()
+      end
+    end
+  end
+  
+  Controls["Get Forecast"].EventHandler = function(ctrl)
+    if ctrl.Boolean then
+      Write("start")
+    else
+      Write("stop")
+    end
+  end
+  
+  Controls["Get Rapid Wind Reports"].EventHandler = function(ctrl)
+    if ctrl.Boolean then
+      Write("rapidStart")
+    else
+      Write("rapidStop")
+    end
+  end
+end
