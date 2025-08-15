@@ -20,4 +20,3 @@ The **WeatherFlow Tempest** plugin enables Q-SYS systems to receive and utilize 
 - Choose your preferred API (UDP for local, WebSocket for remote/cloud).
 - Enter your WeatherFlow Tempest station details and, if using WebSocket, your API token.
 - Assign Q-SYS controls or logic to desired weather data points or events.
-
